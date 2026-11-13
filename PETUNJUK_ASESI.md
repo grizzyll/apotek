@@ -64,3 +64,18 @@ Aplikasi akan otomatis terbuka di browser pada alamat: `http://localhost:8501`
 - **Lihat Sidebar:**
   - Ubah dropdown environment dari `DEV` ke `STAGING` atau `PROD`.
   - Tunjukkan bahwa file konfigurasi `.ini` otomatis berganti target database dan level log-nya tanpa mengubah source code.
+
+### 8. Demonstrasi Manajemen Batch & Penjualan FEFO (Action 11 & 13)
+- **Buka Tab Baru: "⏳ Status Kedaluwarsa" (Tab 4 untuk Kasir/Apoteker, Tab 5 untuk Admin):**
+  - Tunjukkan tabel monitoring masa berlaku obat lengkap dengan kolom **Status**:
+    - `🟢 Masih Aman`: Batch obat aktif yang aman dijual (didukung filter status dan pencarian obat).
+    - `🔴 Kadaluarsa`: Batch obat yang telah melewati tanggal kedaluwarsa dan otomatis diblokir dari penjualan.
+  - Tunjukkan KPI ringkasan: Total Batch Terdaftar, Status Masih Aman, dan Status Kadaluarsa beserta banner peringatan farmasi BPOM.
+- **Verifikasi Penjualan Algoritma FEFO (First Expired, First Out):**
+  - Saat transaksi disimpan, Stored Procedure `sp_simpan_penjualan_fefo` otomatis memilih dan memotong stok dari nomor batch yang tanggal kedaluwarsanya paling awal.
+  - Jika satu batch tidak mencukupi, sistem secara otomatis melakukan *split batch* ke batch berikutnya yang masih aktif.
+  - Batch dengan status `🔴 Kadaluarsa` otomatis di-skip dan tidak akan dijual ke konsumen.
+- **Verifikasi Skrip Migrasi & Rollback (Action 13):**
+  - Migrasi diterapkan pada basis data `apotek` dan `apotek_staging` melalui script: `python -m scripts.run_migration`.
+  - Rencana pemulihan darurat (*rollback*) telah disiapkan pada: `sql/04_rollback_fefo.sql`.
+  - Dokumen resmi analisis dampak perubahan: [docs/analisis_dampak_perubahan_fefo.md](docs/analisis_dampak_perubahan_fefo.md).

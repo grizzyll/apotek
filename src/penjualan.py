@@ -26,6 +26,21 @@ class PenjualanService:
             cur.execute(sql)
             return cur.fetchall()
 
+    def ambil_stok_batch_cabang(self):
+        """Membaca rincian stok per nomor batch dan tanggal kedaluwarsa (v_stok_batch_cabang)"""
+        sql = """
+            SELECT id_batch, kode_cabang, nama_cabang, kode_obat, nama_obat, 
+                   nomor_batch, tgl_kadaluarsa, sisa_hari_kadaluarsa, jumlah_stok, status_kadaluarsa
+            FROM v_stok_batch_cabang
+            ORDER BY tgl_kadaluarsa ASC, kode_obat ASC
+        """
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(sql)
+                return cur.fetchall()
+        except Exception:
+            return []
+
     def ambil_riwayat_penjualan(self, kode_cabang=None):
         """
         Membaca riwayat transaksi penjualan beserta rincian kode_obat dan nama_obat.
@@ -82,8 +97,15 @@ class PenjualanService:
 
         try:
             with self.conn.cursor() as cur:
-                # Memanggil stored procedure
-                cur.callproc("sp_simpan_penjualan", (no_faktur, kode_cabang, json_str))
+                # Memanggil Stored Procedure FEFO (First Expired, First Out)
+                # Fallback ke sp_simpan_penjualan lama jika SP FEFO belum ada / telah di-rollback
+                try:
+                    cur.callproc("sp_simpan_penjualan_fefo", (no_faktur, kode_cabang, json_str))
+                except pymysql.MySQLError as pe:
+                    if len(pe.args) > 0 and pe.args[0] in (1305, 1142):
+                        cur.callproc("sp_simpan_penjualan", (no_faktur, kode_cabang, json_str))
+                    else:
+                        raise pe
             self.conn.commit()
             return True, f"Transaksi {no_faktur} berhasil disimpan!"
         except pymysql.MySQLError as e:

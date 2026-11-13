@@ -319,6 +319,19 @@ with st.sidebar:
     st.caption(f"📁 Target DB: `{cfg_cur.get('dbname', 'apotek')}` | Log: `{cfg_cur.get('log_level', 'INFO')}`")
 
     st.markdown("---")
+    st.markdown("##### 📄 Dokumen Portofolio Asesi")
+    pdf_path = "RANGKUMAN_PROYEK_ASESI.pdf"
+    if os.path.exists(pdf_path):
+        with open(pdf_path, "rb") as f_pdf:
+            st.download_button(
+                label="📥 Unduh Rangkuman Proyek (PDF)",
+                data=f_pdf.read(),
+                file_name="Rangkuman_Proyek_Sertifikasi_Programmer_Basis_Data.pdf",
+                mime="application/pdf",
+                use_container_width=True
+            )
+
+    st.markdown("---")
     if st.button("🚪 Keluar (Logout)", use_container_width=True):
         if "db_conn" in st.session_state and st.session_state.db_conn:
             try:
@@ -356,18 +369,140 @@ SORT_MAP = {
 }
 
 # ========================================================
+# HELPER KOMPONEN: TAB STATUS KEDALUWARSA OBAT (FEFO)
+# ========================================================
+def render_tab_status_kadaluarsa(svc, is_admin=False):
+    st.markdown("#### ⏳ Status Kedaluwarsa Obat & Kontrol Batch (FEFO)")
+    st.caption(
+        "Memantau status masa berlaku obat per nomor batch dan tanggal kedaluwarsa. "
+        "Sesuai regulasi farmasi (CDOB/BPOM) dan logika FEFO, sistem secara otomatis "
+        "memblokir penjualan obat yang telah kedaluwarsa."
+    )
+
+    batch_data = svc.ambil_stok_batch_cabang()
+    if not batch_data:
+        st.info("ℹ️ Belum ada data batch obat untuk ditampilkan.")
+        return
+
+    df = pd.DataFrame(batch_data)
+
+    # Label Status: 'Masih Aman' atau 'Kadaluarsa'
+    def label_status(row):
+        if row.get("status_kadaluarsa") == "KADALUARSA" or (row.get("sisa_hari_kadaluarsa") is not None and row["sisa_hari_kadaluarsa"] <= 0):
+            return "🔴 Kadaluarsa"
+        return "🟢 Masih Aman"
+
+    def format_sisa_hari(sisa):
+        if sisa is None:
+            return "-"
+        if sisa < 0:
+            return f"Lewat {abs(sisa)} hari"
+        elif sisa == 0:
+            return "Hari ini (Expired)"
+        elif sisa <= 90:
+            return f"{sisa} hari lagi (H-90)"
+        return f"{sisa} hari lagi"
+
+    df["status_tampil"] = df.apply(label_status, axis=1)
+    df["sisa_waktu"] = df["sisa_hari_kadaluarsa"].apply(format_sisa_hari)
+
+    # KPI Metrics
+    total_batch = len(df)
+    total_aman = (df["status_tampil"] == "🟢 Masih Aman").sum()
+    total_kadaluarsa = (df["status_tampil"] == "🔴 Kadaluarsa").sum()
+
+    k1, k2, k3 = st.columns(3)
+    render_kpi(k1, "Total Batch Terdaftar", f"{total_batch} Batch", "Tercatat di Basis Data")
+    render_kpi(k2, "Status Masih Aman", f"{int(total_aman)} Batch", "Siap Dijual (FEFO Aktif)")
+    render_kpi(k3, "Status Kadaluarsa", f"{int(total_kadaluarsa)} Batch", "Diblokir dari Penjualan")
+
+    st.markdown("---")
+
+    # Alert Peringatan jika ada obat kadaluarsa
+    if total_kadaluarsa > 0:
+        st.error(
+            f"⚠️ **PERINGATAN REGULASI FARMASI:** Terdeteksi **{total_kadaluarsa} batch obat KADALUARSA**! "
+            f"Database melalui Stored Procedure `sp_simpan_penjualan_fefo` secara otomatis memblokir transaksi penjualan untuk batch yang sudah kedaluwarsa."
+        )
+
+    # Filter & Pencarian
+    col_f1, col_f2 = st.columns([1, 2])
+    with col_f1:
+        filter_status = st.selectbox(
+            "Filter Status:",
+            ["Semua", "🟢 Masih Aman", "🔴 Kadaluarsa"],
+            key=f"sb_filter_exp_{'admin' if is_admin else 'cabang'}"
+        )
+    with col_f2:
+        search_query = st.text_input(
+            "Cari Obat / Nomor Batch:",
+            placeholder="Ketik nama obat, kode, atau nomor batch...",
+            key=f"ti_search_exp_{'admin' if is_admin else 'cabang'}"
+        )
+
+    df_view = df.copy()
+    if filter_status != "Semua":
+        df_view = df_view[df_view["status_tampil"] == filter_status]
+
+    if search_query:
+        sq = search_query.lower()
+        df_view = df_view[
+            df_view["nama_obat"].str.lower().str.contains(sq) |
+            df_view["kode_obat"].str.lower().str.contains(sq) |
+            df_view["nomor_batch"].str.lower().str.contains(sq)
+        ]
+
+    st.markdown(f"**Menampilkan {len(df_view)} dari {len(df)} nomor batch:**")
+
+    if is_admin:
+        cols_order = [
+            "kode_cabang", "nama_cabang", "kode_obat", "nama_obat",
+            "nomor_batch", "tgl_kadaluarsa", "sisa_waktu", "jumlah_stok", "status_tampil"
+        ]
+        rename_map = {
+            "kode_cabang": "Cabang",
+            "nama_cabang": "Nama Cabang",
+            "kode_obat": "Kode Obat",
+            "nama_obat": "Nama Obat",
+            "nomor_batch": "Nomor Batch",
+            "tgl_kadaluarsa": "Tgl Kedaluwarsa",
+            "sisa_waktu": "Masa Berlaku",
+            "jumlah_stok": "Stok Unit",
+            "status_tampil": "Status"
+        }
+    else:
+        cols_order = [
+            "kode_obat", "nama_obat", "nomor_batch",
+            "tgl_kadaluarsa", "sisa_waktu", "jumlah_stok", "status_tampil"
+        ]
+        rename_map = {
+            "kode_obat": "Kode Obat",
+            "nama_obat": "Nama Obat",
+            "nomor_batch": "Nomor Batch",
+            "tgl_kadaluarsa": "Tgl Kedaluwarsa",
+            "sisa_waktu": "Masa Berlaku",
+            "jumlah_stok": "Stok Unit",
+            "status_tampil": "Status"
+        }
+
+    df_display = df_view[[c for c in cols_order if c in df_view.columns]].rename(columns=rename_map)
+    st.dataframe(df_display, use_container_width=True, hide_index=True)
+
+
+# ========================================================
 # ============================================================
-# ADMIN PUSAT — 4 TAB
-# (1. Pantau Cabang | 2. Manajemen Cabang | 3. Master Obat | 4. Manajemen Pengguna)
+# ADMIN PUSAT — 5 TAB
+# (1. Pantau Cabang | 2. Manajemen Cabang | 3. Master Obat | 4. Manajemen Pengguna | 5. Status Kedaluwarsa)
 # ============================================================
 # ========================================================
 if IS_ADMIN:
 
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📈 1. Pantau Cabang",
         "🏪 2. Manajemen Cabang",
         "📦 3. Master Obat",
         "👥 4. Manajemen Pengguna",
+        "⏳ 5. Status Kedaluwarsa",
     ])
 
     # ----------------------------------------------------------
@@ -763,11 +898,17 @@ if IS_ADMIN:
                             except Exception as e:
                                 st.error(f"Gagal drop pengguna: {e}")
 
+        # ----------------------------------------------------------
+        # ADMIN TAB 5 — STATUS KEDALUWARSA OBAT (SELURUH CABANG)
+        # ----------------------------------------------------------
+        with tab5:
+            render_tab_status_kadaluarsa(svc=PenjualanService(conn_aktif()), is_admin=True)
+
 
 # ========================================================
 # ============================================================
-# KASIR / APOTEKER — 3 TAB
-# (1. Transaksi Penjualan | 2. Stok Obat Cabang | 3. Riwayat Penjualan)
+# KASIR / APOTEKER — 4 TAB
+# (1. Transaksi Penjualan | 2. Stok Obat Cabang | 3. Riwayat Penjualan | 4. Status Kedaluwarsa)
 # ============================================================
 # ========================================================
 else:
@@ -786,10 +927,11 @@ else:
             "**Obat Keras (KTG-03)** sesuai aturan bisnis."
         )
 
-    tab1, tab2, tab3 = st.tabs([
+    tab1, tab2, tab3, tab4 = st.tabs([
         tab1_label,
         "📦 2. Stok Obat Cabang",
         "📋 3. Riwayat Penjualan",
+        "⏳ 4. Status Kedaluwarsa",
     ])
 
     # ----------------------------------------------------------
@@ -970,6 +1112,18 @@ else:
                 df_stok[["kode_cabang","nama_cabang","kode_obat","nama_obat","jumlah_stok","stok_minimum"]],
                 use_container_width=True, hide_index=True
             )
+
+            # Rincian Batch & Tanggal Kedaluwarsa (FEFO)
+            with st.expander("🏷️ Lihat Rincian Nomor Batch & Tanggal Kedaluwarsa (FEFO)"):
+                batch_data = svc.ambil_stok_batch_cabang()
+                if batch_data:
+                    df_b = pd.DataFrame(batch_data)
+                    st.dataframe(
+                        df_b[["kode_obat", "nama_obat", "nomor_batch", "tgl_kadaluarsa", "sisa_hari_kadaluarsa", "jumlah_stok", "status_kadaluarsa"]],
+                        use_container_width=True, hide_index=True
+                    )
+                else:
+                    st.info("Belum ada data batch untuk cabang ini.")
         else:
             st.info("Tidak ada data stok untuk cabang Anda.")
 
@@ -1018,3 +1172,11 @@ else:
             )
         else:
             st.info("Belum ada riwayat penjualan untuk cabang Anda.")
+
+    # ----------------------------------------------------------
+    # KASIR/APOTEKER TAB 4 — STATUS KEDALUWARSA OBAT (FEFO)
+    # ----------------------------------------------------------
+    with tab4:
+        conn = conn_aktif()
+        svc  = PenjualanService(conn)
+        render_tab_status_kadaluarsa(svc=svc, is_admin=False)
