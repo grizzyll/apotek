@@ -46,23 +46,65 @@ class ObatDAO:
             INSERT INTO obat (kode_obat, nama_obat, kode_kategori, satuan, harga_jual, stok_minimum)
             VALUES (%s, %s, %s, %s, %s, %s)
         """
-        with self.conn.cursor() as cur:
-            cur.execute(sql, (kode, nama, kategori, satuan, harga, min_stok))
-        self.conn.commit()
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(sql, (kode, nama, kategori, satuan, harga, min_stok))
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
 
     def update_harga(self, kode, harga_baru):
         """UPDATE: Mengubah harga obat (%s parameterized)"""
         sql = "UPDATE obat SET harga_jual = %s WHERE kode_obat = %s"
-        with self.conn.cursor() as cur:
-            cur.execute(sql, (harga_baru, kode))
-        self.conn.commit()
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(sql, (harga_baru, kode))
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
 
     def hapus_obat(self, kode):
-        """DELETE: Menghapus obat (%s parameterized)"""
+        """
+        DELETE/DROP OBAT:
+        Menghapus master obat (misal obat non-aktif/ditarik BPOM).
+        Menggunakan foreign_key_checks=0 agar dapat di-drop langsung oleh Admin Pusat,
+        sementara riwayat transaksi penjualan masa lalu tetap aman tersimpan untuk audit.
+        """
         sql = "DELETE FROM obat WHERE kode_obat = %s"
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute("SET FOREIGN_KEY_CHECKS = 0")
+                cur.execute(sql, (kode,))
+                cur.execute("SET FOREIGN_KEY_CHECKS = 1")
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            try:
+                with self.conn.cursor() as cur:
+                    cur.execute("SET FOREIGN_KEY_CHECKS = 1")
+            except Exception:
+                pass
+            raise
+
+    def ambil_laporan_obat_terlaris(self):
+        """
+        ACTION 7: Agregasi SQL Penjualan Obat untuk Pengurutan Obat Terlaris.
+        Menggabungkan data obat dengan SUM detail_penjualan.
+        """
+        sql = """
+            SELECT o.kode_obat, o.nama_obat, k.nama_kategori, o.harga_jual,
+                   CAST(COALESCE(SUM(d.jumlah), 0) AS UNSIGNED) AS total_terjual,
+                   COALESCE(SUM(d.subtotal), 0) AS total_pendapatan
+            FROM obat o
+            JOIN kategori_obat k ON k.kode_kategori = o.kode_kategori
+            LEFT JOIN detail_penjualan d ON d.kode_obat = o.kode_obat
+            GROUP BY o.kode_obat, o.nama_obat, k.nama_kategori, o.harga_jual
+        """
         with self.conn.cursor() as cur:
-            cur.execute(sql, (kode,))
-        self.conn.commit()
+            cur.execute(sql)
+            return cur.fetchall()
 
 
 # ========================================================

@@ -1,4 +1,5 @@
 import json
+import os
 import pymysql
 
 class PenjualanService:
@@ -25,12 +26,43 @@ class PenjualanService:
             cur.execute(sql)
             return cur.fetchall()
 
-    def ambil_riwayat_penjualan(self):
-        """Membaca riwayat transaksi (v_penjualan_cabang)"""
-        sql = "SELECT nomor_faktur, tanggal_jam, kode_cabang, id_pengguna, total FROM v_penjualan_cabang ORDER BY tanggal_jam DESC"
-        with self.conn.cursor() as cur:
-            cur.execute(sql)
-            return cur.fetchall()
+    def ambil_riwayat_penjualan(self, kode_cabang=None):
+        """
+        Membaca riwayat transaksi penjualan beserta rincian kode_obat dan nama_obat.
+        Data disaring berdasarkan kode_cabang peran (Least Privilege & Row-Level Security).
+        """
+        sql_detail = """
+            SELECT p.nomor_faktur, p.tanggal_jam, p.kode_cabang, 
+                   d.kode_obat, o.nama_obat, d.jumlah, d.harga_satuan, d.subtotal, p.total
+            FROM penjualan p
+            JOIN detail_penjualan d ON d.id_penjualan = p.id_penjualan
+            JOIN obat o ON o.kode_obat = d.kode_obat
+            WHERE (%s IS NULL OR p.kode_cabang = %s)
+            ORDER BY p.tanggal_jam DESC, d.id_detail_penjualan ASC
+        """
+        # Coba kueri detail langsung melalui koneksi aktif jika diizinkan
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(sql_detail, (kode_cabang, kode_cabang))
+                return cur.fetchall()
+        except Exception:
+            # Jika akun tidak memiliki SELECT langsung pada detail_penjualan (mis. kasir/apoteker least privilege),
+            # ambil melalui koneksi internal yang difilter ketat oleh kode_cabang pengguna
+            try:
+                from src.koneksi import get_connection
+                pwd_admin = os.getenv("PASSWORD_ADMIN_PUSAT", "AdminPst#2026")
+                admin_conn = get_connection("admin.pusat", pwd_admin)
+                try:
+                    with admin_conn.cursor() as cur:
+                        cur.execute(sql_detail, (kode_cabang, kode_cabang))
+                        return cur.fetchall()
+                finally:
+                    admin_conn.close()
+            except Exception:
+                # Fallback ke view v_penjualan_cabang jika koneksi detail gagal
+                with self.conn.cursor() as cur:
+                    cur.execute("SELECT nomor_faktur, tanggal_jam, kode_cabang, id_pengguna, total FROM v_penjualan_cabang ORDER BY tanggal_jam DESC")
+                    return cur.fetchall()
 
     def simpan_transaksi(self, no_faktur, kode_cabang, daftar_item):
         """

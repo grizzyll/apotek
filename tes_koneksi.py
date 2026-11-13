@@ -9,7 +9,8 @@ user = sys.argv[1]
 pwd = sys.argv[2]
 
 try:
-    conn = get_connection("config/dev.ini", user, pwd)
+    env = sys.argv[3] if len(sys.argv) > 3 else "dev"
+    conn = get_connection(user, pwd, env=env)
     with conn.cursor() as cur:
         cur.execute("SELECT USER() AS u, CURRENT_USER() AS cu, DATABASE() AS db")
         res = cur.fetchone()
